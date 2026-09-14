@@ -12,7 +12,7 @@ Image Flasher is a small Windows application for Counter-Strike 2 that shows a c
 * Adjustable flash duration and hold time
 * Adjustable flash opacity
 * Optional sound on kill
-* Supports WAV and MP3 sounds
+* Supports WAV sounds
 * Sound playback can overlap between rapid kills
 * Optional debug mode
 * Russian / English interface
@@ -161,7 +161,7 @@ Image Flasher — небольшое приложение для Windows, кот
 * Настройка длительности и удержания вспышки
 * Настройка прозрачности вспышки
 * Дополнительный звук при убийстве
-* Поддержка WAV и MP3
+* Поддержка WAV
 * Наложение звуков при быстрых убийствах без обрыва предыдущего звука
 * Режим Debug
 * Русский / английский интерфейс
