@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+
+        <TargetFramework>net8.0-windows</TargetFramework>
+        <UseWindowsForms>true</UseWindowsForms>
+
+        <AssemblyName>ImageFlasher</AssemblyName>
+        
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+
+        <PlatformTarget>x64</PlatformTarget>
+
+        <!-- Windows x64 -->
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+        <!-- Самодостаточная программа -->
+        <SelfContained>true</SelfContained>
+
+        <!-- Всё приложение в один EXE -->
+        <PublishSingleFile>true</PublishSingleFile>
+
+        <!-- Runtime DLL тоже упаковываются в EXE -->
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+
+        <!-- Не создавать PDB -->
+        <DebugType>None</DebugType>
+        <DebugSymbols>false</DebugSymbols>
+
+        <!-- Не использовать ReadyToRun -->
+        <PublishReadyToRun>false</PublishReadyToRun>
+
+        <ApplicationIcon>sasun.ico</ApplicationIcon>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference
+                Include="CounterStrike2GSI"
+                Version="1.0.4.2659" />
+    </ItemGroup>
+
+</Project>
