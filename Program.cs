@@ -1,20 +1,263 @@
 ﻿using CounterStrike2GSI;
 using CounterStrike2GSI.EventMessages;
 using System.Diagnostics;
-using System.Text;
+using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Reflection;
+using System.Text;
 using System.Text.Json;
+using System.Windows.Forms;
+
+Logger.Initialize();
 
 ApplicationConfiguration.Initialize();
+Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+Application.ThreadException +=
+    (_, e) => Logger.Error("APP", "Unhandled UI thread exception", e.Exception);
 
-var settings = AppSettings.Load();
+AppDomain.CurrentDomain.UnhandledException +=
+    (_, e) =>
+    {
+        if (e.ExceptionObject is Exception exception)
+        {
+            Logger.Error(
+                "APP",
+                $"Unhandled application exception | IsTerminating={e.IsTerminating}",
+                exception);
+        }
+        else
+        {
+            Logger.Error(
+                "APP",
+                $"Unhandled non-Exception object | IsTerminating={e.IsTerminating}");
+        }
+    };
 
-using var appContext =
-    new TrayApplicationContext(settings);
+try
+{
+    Logger.Info(
+        "APP",
+        $"Application started | .NET={Environment.Version} | " +
+        $"64BitProcess={Environment.Is64BitProcess} | " +
+        $"OS={Environment.OSVersion} | " +
+        $"Assembly={Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown"}");
 
-Application.Run(appContext);
+    var settings = AppSettings.Load();
+
+    Logger.Info(
+        "SETTINGS",
+        $"Settings loaded | FlashEnabled={settings.FlashEnabled} | " +
+        $"SoundEnabled={settings.SoundEnabled} | Duration={settings.FlashDurationMs}ms | " +
+        $"Hold={settings.FlashHoldMs}ms | Opacity={settings.FlashOpacity}% | " +
+        $"PreserveAspect={settings.PreserveImageAspectRatio} | Language={settings.Language}");
+
+    using var appContext =
+        new TrayApplicationContext(settings);
+
+    Application.Run(appContext);
+}
+catch (Exception ex)
+{
+    Logger.Error("APP", "Fatal exception escaped application startup/run", ex);
+    throw;
+}
+finally
+{
+    Logger.Info("APP", "Application stopped");
+    Logger.Shutdown();
+}
+
+
+// ============================================================
+// LOGGER
+// ============================================================
+sealed class Logger
+{
+    private static readonly object Sync = new();
+
+    private static StreamWriter? _writer;
+
+    private static string _currentFile = string.Empty;
+
+    private static readonly string SessionId =
+        Guid.NewGuid().ToString("N")[..8];
+
+    private static readonly string LogDirectory =
+        Path.Combine(
+            AppContext.BaseDirectory,
+            "Logs");
+
+    private const int RetentionDays = 14;
+
+    public static void Initialize()
+    {
+        lock (Sync)
+        {
+            try
+            {
+                Directory.CreateDirectory(LogDirectory);
+                CleanupOldLogs();
+                EnsureWriter();
+            }
+            catch
+            {
+                // Logging must never prevent the application from starting.
+            }
+        }
+
+        Info("APP", "Logger initialized");
+    }
+
+    public static void Shutdown()
+    {
+        lock (Sync)
+        {
+            try
+            {
+                _writer?.Flush();
+                _writer?.Dispose();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _writer = null;
+                _currentFile = string.Empty;
+            }
+        }
+    }
+
+    public static void Debug(string source, string message)
+    {
+        Write("DEBUG", source, message, null);
+    }
+
+    public static void Info(string source, string message)
+    {
+        Write("INFO", source, message, null);
+    }
+
+    public static void Warning(string source, string message)
+    {
+        Write("WARN", source, message, null);
+    }
+
+    public static void Error(string source, string message)
+    {
+        Write("ERROR", source, message, null);
+    }
+
+    public static void Error(string source, string message, Exception exception)
+    {
+        Write("ERROR", source, message, exception);
+    }
+
+    private static void Write(
+        string level,
+        string source,
+        string message,
+        Exception? exception)
+    {
+        lock (Sync)
+        {
+            try
+            {
+                EnsureWriter();
+
+                string timestamp =
+                    DateTimeOffset.Now.ToString(
+                        "yyyy-MM-dd HH:mm:ss.fff zzz");
+
+                string safeMessage =
+                    message.Replace("\r", " ").Replace("\n", " ");
+
+                string line =
+                    $"{timestamp} | {level,-5} | {source,-8} | Session={SessionId} | {safeMessage}";
+
+                _writer!.WriteLine(line);
+
+                if (exception != null)
+                {
+                    _writer.WriteLine("Exception:");
+                    _writer.WriteLine(exception.ToString());
+                }
+
+                _writer.Flush();
+            }
+            catch
+            {
+                // Never allow logging failures to affect the application.
+            }
+        }
+    }
+
+    private static void EnsureWriter()
+    {
+        string file =
+            Path.Combine(
+                LogDirectory,
+                $"ImageFlasher_{DateTime.Now:yyyy-MM-dd}.log");
+
+        if (_writer != null &&
+            string.Equals(
+                _currentFile,
+                file,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _writer?.Flush();
+        _writer?.Dispose();
+
+        _writer =
+            new StreamWriter(
+                new FileStream(
+                    file,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite),
+                new UTF8Encoding(false))
+            {
+                AutoFlush = true
+            };
+
+        _currentFile = file;
+    }
+
+    private static void CleanupOldLogs()
+    {
+        try
+        {
+            DateTime cutoff =
+                DateTime.Now.Date.AddDays(
+                    -RetentionDays);
+
+            foreach (string file in Directory.EnumerateFiles(
+                         LogDirectory,
+                         "ImageFlasher_*.log",
+                         SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    if (File.GetLastWriteTime(file) < cutoff)
+                    {
+                        File.Delete(file);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+        catch
+        {
+        }
+    }
+}
 
 
 // ============================================================
@@ -55,6 +298,10 @@ sealed class AppSettings
                 new AppSettings();
 
             settings.Save();
+
+            Logger.Info(
+                "SETTINGS",
+                "Settings file not found; created default settings");
 
             return settings;
         }
@@ -110,8 +357,13 @@ sealed class AppSettings
 
             return settings;
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Error(
+                "SETTINGS",
+                "Failed to load settings; using defaults",
+                ex);
+
             var settings =
                 new AppSettings();
 
@@ -143,8 +395,12 @@ sealed class AppSettings
                 FilePath,
                 json);
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Error(
+                "SETTINGS",
+                "Failed to save settings",
+                ex);
         }
     }
 }
@@ -303,15 +559,21 @@ sealed class TrayApplicationContext : ApplicationContext
                     "CS2KillOverlay");
 
 
-            Console.WriteLine(
-                configCreated
-                    ? "GSI config создан."
-                    : "Не удалось создать GSI config.");
+            if (configCreated)
+            {
+                Logger.Info("GSI", "GSI configuration file generated");
+            }
+            else
+            {
+                Logger.Warning("GSI", "Failed to generate GSI configuration file");
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine(
-                $"Ошибка создания GSI config: {ex.Message}");
+            Logger.Error(
+                "GSI",
+                "Exception while generating GSI configuration file",
+                ex);
         }
 
 
@@ -321,15 +583,21 @@ sealed class TrayApplicationContext : ApplicationContext
                 _listener.Start();
 
 
-            Console.WriteLine(
-                started
-                    ? "CS2 Kill Overlay запущен."
-                    : "Не удалось запустить GSI listener.");
+            if (started)
+            {
+                Logger.Info("GSI", "GSI listener started | Port=3000");
+            }
+            else
+            {
+                Logger.Warning("GSI", "GSI listener failed to start | Port=3000");
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine(
-                $"Ошибка запуска GSI: {ex.Message}");
+            Logger.Error(
+                "GSI",
+                "Exception while starting GSI listener",
+                ex);
         }
 
 
@@ -405,18 +673,19 @@ private void OnPlayerGotKill(
                 "unknown";
 
 
-            Console.WriteLine(
-                $"KILL | Weapon: {weapon} | " +
-                $"Headshot: {gameEvent.IsHeadshot} | " +
-                $"Ace: {gameEvent.IsAce}");
+            Logger.Info(
+                "KILL",
+                $"Kill received | Weapon={weapon} | Headshot={gameEvent.IsHeadshot} | Ace={gameEvent.IsAce}");
 
 
             _overlay.ShowFlash();
         }
         catch (Exception ex)
         {
-            Console.WriteLine(
-                $"Ошибка обработки kill: {ex.Message}");
+            Logger.Error(
+                "KILL",
+                "Exception while processing kill event",
+                ex);
         }
     }
 
@@ -4378,6 +4647,15 @@ private static readonly string[] SupportedExtensions =
 
 
     [DllImport(
+        "winmm.dll",
+        CharSet = CharSet.Unicode)]
+    private static extern bool mciGetErrorString(
+        int errorCode,
+        StringBuilder errorText,
+        int errorTextLength);
+
+
+    [DllImport(
         "user32.dll",
         SetLastError = true)]
     private static extern bool SetWindowPos(
@@ -4658,16 +4936,26 @@ public int RefreshSounds()
 
             if (string.IsNullOrWhiteSpace(newSound))
             {
+                Logger.Info("SOUND", "No supported sound file found");
                 return 0;
             }
 
 
             _soundFile = newSound;
 
+            Logger.Info(
+                "SOUND",
+                $"Sound selected | File={Path.GetFileName(_soundFile)} | Format={Path.GetExtension(_soundFile)}");
+
             return 1;
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Error(
+                "SOUND",
+                "Failed to refresh sound",
+                ex);
+
             _soundFile = null;
 
             return 0;
@@ -4737,17 +5025,24 @@ public int RefreshImages()
             CreateNewShuffle();
 
 
-            Console.WriteLine(
-                $"Изображения обновлены. " +
-                $"Найдено: {_imageFiles.Count}");
+            Logger.Info(
+                "IMAGE",
+                $"Images refreshed | Count={_imageFiles.Count}");
+
+            if (_imageFiles.Count == 0)
+            {
+                Logger.Info("IMAGE", "No supported images found; white flash fallback is active");
+            }
 
 
             return _imageFiles.Count;
         }
         catch (Exception ex)
         {
-            Console.WriteLine(
-                $"Ошибка обновления изображений: {ex.Message}");
+            Logger.Error(
+                "IMAGE",
+                "Failed to refresh images",
+                ex);
 
 
             _imageFiles =
@@ -4856,10 +5151,28 @@ public void SyncNow()
     // PLAY SOUND
     // ========================================================
 
+    private static string GetMciErrorText(
+        int errorCode)
+    {
+        StringBuilder buffer =
+            new StringBuilder(256);
+
+        return mciGetErrorString(
+                   errorCode,
+                   buffer,
+                   buffer.Capacity)
+            ? buffer.ToString()
+            : $"MCI error code {errorCode}";
+    }
+
+
     private void PlaySound()
     {
         if (string.IsNullOrWhiteSpace(_soundFile))
+        {
+            Logger.Debug("SOUND", "Play skipped | No sound file loaded");
             return;
+        }
 
         try
         {
@@ -4880,12 +5193,18 @@ public void SyncNow()
                     ? $"open \"{escapedPath}\" type mpegvideo alias {alias}"
                     : $"open \"{escapedPath}\" type waveaudio alias {alias}";
 
-            if (mciSendString(
+            int openResult =
+                mciSendString(
                     openCommand,
                     null,
                     0,
-                    IntPtr.Zero) != 0)
+                    IntPtr.Zero);
+
+            if (openResult != 0)
             {
+                Logger.Warning(
+                    "SOUND",
+                    $"MCI open failed | File={Path.GetFileName(_soundFile)} | Code={openResult} | Error={GetMciErrorText(openResult)}");
                 return;
             }
 
@@ -4905,11 +5224,29 @@ public void SyncNow()
                     ? parsedLength
                     : 1000;
 
-            mciSendString(
-                $"play {alias}",
-                null,
-                0,
-                IntPtr.Zero);
+            int playResult =
+                mciSendString(
+                    $"play {alias}",
+                    null,
+                    0,
+                    IntPtr.Zero);
+
+            if (playResult != 0)
+            {
+                Logger.Warning(
+                    "SOUND",
+                    $"MCI play failed | File={Path.GetFileName(_soundFile)} | Code={playResult} | Error={GetMciErrorText(playResult)}");
+                mciSendString(
+                    $"close {alias}",
+                    null,
+                    0,
+                    IntPtr.Zero);
+                return;
+            }
+
+            Logger.Info(
+                "SOUND",
+                $"Sound started | File={Path.GetFileName(_soundFile)} | Alias={alias}");
 
             _ = Task.Run(
                 async () =>
@@ -4929,8 +5266,12 @@ public void SyncNow()
                     }
                 });
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Error(
+                "SOUND",
+                "Exception while playing sound",
+                ex);
         }
     }
 
@@ -4941,7 +5282,10 @@ public void SyncNow()
 public void ShowFlash(bool force = false)
     {
         if (!_settings.FlashEnabled)
+        {
+            Logger.Debug("FLASH", "Flash skipped | FlashEnabled=false");
             return;
+        }
 
 
         if (IsDisposed)
@@ -4965,6 +5309,9 @@ public void ShowFlash(bool force = false)
             (_cs2WindowHandle == IntPtr.Zero ||
              GetForegroundWindow() != _cs2WindowHandle))
         {
+            Logger.Debug(
+                "FLASH",
+                "Flash skipped | CS2 is not the foreground window");
             return;
         }
 
@@ -5002,6 +5349,10 @@ public void ShowFlash(bool force = false)
             _currentImage?.Dispose();
 
             _currentImage = null;
+
+            Logger.Info(
+                "FLASH",
+                "No valid image available; using white flash fallback");
         }
 
 
@@ -5010,6 +5361,12 @@ public void ShowFlash(bool force = false)
 
         _flashActive =
             true;
+
+        Logger.Info(
+            "FLASH",
+            $"Flash started | Force={force} | Duration={_settings.FlashDurationMs}ms | " +
+            $"Hold={_settings.FlashHoldMs}ms | Opacity={_settings.FlashOpacity}% | " +
+            $"Sound={_settings.SoundEnabled}");
 
 
         _flashAlpha =
@@ -5095,19 +5452,19 @@ private bool LoadNextImage()
                     selectedFile;
 
 
-                Console.WriteLine(
-                    $"Image: " +
-                    $"{Path.GetFileName(selectedFile)}");
+                Logger.Info(
+                    "IMAGE",
+                    $"Image loaded | File={Path.GetFileName(selectedFile)}");
 
 
                 return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"Ошибка загрузки изображения " +
-                    $"{Path.GetFileName(selectedFile)}: " +
-                    $"{ex.Message}");
+                Logger.Error(
+                    "IMAGE",
+                    $"Failed to load image | File={Path.GetFileName(selectedFile)}",
+                    ex);
 
 
                 _imageFiles.RemoveAll(
@@ -5225,6 +5582,8 @@ private void OnFlashTimer()
             _currentImage?.Dispose();
 
             _currentImage = null;
+
+            Logger.Info("FLASH", "Flash finished");
         }
 
 
@@ -5380,6 +5739,15 @@ private void UpdateCs2Rect()
     private void SetCs2ConnectionStatus(
         bool connected)
     {
+        if (_cs2Connected != connected)
+        {
+            Logger.Info(
+                "CS2",
+                connected
+                    ? "CS2 window detected / connected"
+                    : "CS2 window lost / disconnected");
+        }
+
         _cs2Connected =
             connected;
     }
